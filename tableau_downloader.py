@@ -45,7 +45,7 @@ class TableauDownloader:
     def download(self) -> Path:
         """Run the full download and return the path to the CSV."""
         with sync_playwright() as p:
-            browser, context, page = self._launch_browser(p)
+            context, page = self._launch_browser(p)
             try:
                 self._login(page)
 
@@ -64,52 +64,76 @@ class TableauDownloader:
                 return dest
             finally:
                 context.close()
-                browser.close()
 
     # ------------------------------------------------------------------
     # Browser / navigation
     # ------------------------------------------------------------------
 
     def _launch_browser(self, playwright):
-        # `headless` comes from config; set to false in config.local.yaml on
-        # the first run so you can watch the browser and fix any selector.
+        # Uses a *persistent* context so the SSO/MFA login from your first
+        # run is cached in `user_data_dir` and reused on every subsequent
+        # run. `browser_channel` lets us drive your already-installed Edge
+        # instead of downloading Chromium (which avoids the corporate-CA
+        # cert dance for `playwright install chromium`).
         headless = bool(self.cfg.get("headless", False))
-        browser = playwright.chromium.launch(headless=headless)
-        context = browser.new_context(
-            accept_downloads=True,
-            viewport={"width": 1680, "height": 950},
-        )
-        page = context.new_page()
+        channel = (self.cfg.get("browser_channel") or "").strip() or None
+        user_data_dir = Path(
+            self.cfg.get("user_data_dir", "./.playwright-profile")
+        ).expanduser().resolve()
+        user_data_dir.mkdir(parents=True, exist_ok=True)
+
+        launch_kwargs = {
+            "user_data_dir": str(user_data_dir),
+            "headless": headless,
+            "accept_downloads": True,
+            "viewport": {"width": 1680, "height": 950},
+        }
+        if channel:
+            launch_kwargs["channel"] = channel
+
+        context = playwright.chromium.launch_persistent_context(**launch_kwargs)
+        page = context.pages[0] if context.pages else context.new_page()
         page.set_default_timeout(self.cfg["page_load_timeout"] * 1000)
-        return browser, context, page
+        return context, page
 
     def _login(self, page):
-        logger.info("Opening Cockpit and signing in …")
+        logger.info("Opening Cockpit …")
         page.goto(self.cfg["site_url"])
 
-        # PepsiCo uses SSO (Microsoft / SAML). The flow is usually:
-        # email → Next → password → Sign in → (optional MFA).
-        # Adjust these selectors after watching the first run.
-        try:
-            page.wait_for_selector('input[type="email"], input[name="loginfmt"]', timeout=20_000)
-            email_box = page.query_selector('input[type="email"], input[name="loginfmt"]')
-            email_box.fill(self.cfg["email"])
-            page.click('input[type="submit"], button[type="submit"]')
+        # If the persistent profile already has a valid session, we'll land
+        # straight on a Tableau page and never see a login form — skip auto-
+        # fill in that case. Auto-fill only fires if creds are configured
+        # AND a login form actually appears within a few seconds.
+        email = (self.cfg.get("email") or "").strip()
+        password = (self.cfg.get("password") or "").strip()
 
-            page.wait_for_selector('input[type="password"], input[name="passwd"]', timeout=15_000)
-            page.fill('input[type="password"], input[name="passwd"]', self.cfg["password"])
-            page.click('input[type="submit"], button[type="submit"]')
-
-            # Possible "Stay signed in?" prompt
+        if email and password:
             try:
-                page.click('input[value="Yes"], #idSIButton9', timeout=8_000)
-            except PlaywrightTimeout:
-                pass
-        except PlaywrightTimeout:
-            logger.warning("Standard SSO selectors not found — you may already be "
-                           "logged in via SSO, or the flow differs. Continuing.")
+                page.wait_for_selector('input[type="email"], input[name="loginfmt"]', timeout=8_000)
+                logger.info("Login form detected — auto-filling credentials.")
+                page.fill('input[type="email"], input[name="loginfmt"]', email)
+                page.click('input[type="submit"], button[type="submit"]')
 
-        # Wait until a Tableau view is loaded
+                page.wait_for_selector('input[type="password"], input[name="passwd"]', timeout=15_000)
+                page.fill('input[type="password"], input[name="passwd"]', password)
+                page.click('input[type="submit"], button[type="submit"]')
+
+                try:
+                    page.click('input[value="Yes"], #idSIButton9', timeout=8_000)
+                except PlaywrightTimeout:
+                    pass
+            except PlaywrightTimeout:
+                logger.info("No login form appeared — using cached session.")
+        else:
+            logger.info("No credentials configured — relying on cached session "
+                        "or your manual login in the launched browser window.")
+
+        # Give MFA / manual login time to finish, then wait for a Tableau viz.
+        manual_login_wait = int(self.cfg.get("manual_login_wait", 0))
+        if manual_login_wait > 0:
+            logger.info("Waiting %ds for manual login / MFA …", manual_login_wait)
+            time.sleep(manual_login_wait)
+
         page.wait_for_selector("iframe, .tab-widget, #tabViewerToolbarRegion",
                                timeout=self.cfg["page_load_timeout"] * 1000)
         logger.info("Login/landing complete.")

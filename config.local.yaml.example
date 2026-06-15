@@ -7,8 +7,11 @@
 # =============================================================================
 
 tableau:
-  email: "your.email@pepsico.com"
-  password: "your-real-password"
+  # Credentials are now OPTIONAL — if you leave them empty, the script will
+  # open Edge and let YOU log in manually the first time. Cookies persist
+  # in `user_data_dir` so subsequent runs are zero-touch.
+  email: ""
+  password: ""
 
   # Optional: a saved Custom View URL (recommended — skips all filter clicking)
   custom_view_url: ""
@@ -18,6 +21,10 @@ tableau:
 
   # First run: false so you can watch the browser. Flip to true once stable.
   headless: false
+
+  # First run only: give yourself ~120s to complete MFA manually in the
+  # launched Edge window. After login is cached, set this back to 0.
+  manual_login_wait: 120
 
 
 sharepoint:
