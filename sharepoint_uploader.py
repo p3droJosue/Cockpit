@@ -13,17 +13,13 @@ import logging
 from pathlib import Path
 
 import requests
-import yaml
+
+from config_loader import load_config
 
 logger = logging.getLogger(__name__)
 
 GRAPH_BASE = "https://graph.microsoft.com/v1.0"
 TOKEN_URL = "https://login.microsoftonline.com/{tenant_id}/oauth2/v2.0/token"
-
-
-def load_config(config_path: str = "config.yaml") -> dict:
-    with open(config_path, "r", encoding="utf-8") as f:
-        return yaml.safe_load(f)
 
 
 class SharePointUploader:

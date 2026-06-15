@@ -21,15 +21,11 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-import yaml
 from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeout
 
+from config_loader import load_config
+
 logger = logging.getLogger(__name__)
-
-
-def load_config(config_path: str = "config.yaml") -> dict:
-    with open(config_path, "r", encoding="utf-8") as f:
-        return yaml.safe_load(f)
 
 
 def sanitize_filename(name: str) -> str:
@@ -75,8 +71,10 @@ class TableauDownloader:
     # ------------------------------------------------------------------
 
     def _launch_browser(self, playwright):
-        # First run: set headless=False to watch and fix selectors, then True.
-        browser = playwright.chromium.launch(headless=False)
+        # `headless` comes from config; set to false in config.local.yaml on
+        # the first run so you can watch the browser and fix any selector.
+        headless = bool(self.cfg.get("headless", False))
+        browser = playwright.chromium.launch(headless=headless)
         context = browser.new_context(
             accept_downloads=True,
             viewport={"width": 1680, "height": 950},
