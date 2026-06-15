@@ -100,43 +100,103 @@ class TableauDownloader:
         logger.info("Opening Cockpit …")
         page.goto(self.cfg["site_url"])
 
-        # If the persistent profile already has a valid session, we'll land
-        # straight on a Tableau page and never see a login form — skip auto-
-        # fill in that case. Auto-fill only fires if creds are configured
-        # AND a login form actually appears within a few seconds.
+        # If the persistent profile already has a valid Okta session, we'll
+        # land straight on Tableau and never see a login form — skip auto-
+        # fill in that case. Otherwise: fill the User ID + click Log In to
+        # trigger the Okta Verify push, then sit on `manual_login_wait` for
+        # you to tap "Approve" on your phone.
         email = (self.cfg.get("email") or "").strip()
         password = (self.cfg.get("password") or "").strip()
 
-        if email and password:
-            try:
-                page.wait_for_selector('input[type="email"], input[name="loginfmt"]', timeout=8_000)
-                logger.info("Login form detected — auto-filling credentials.")
-                page.fill('input[type="email"], input[name="loginfmt"]', email)
-                page.click('input[type="submit"], button[type="submit"]')
-
-                page.wait_for_selector('input[type="password"], input[name="passwd"]', timeout=15_000)
-                page.fill('input[type="password"], input[name="passwd"]', password)
-                page.click('input[type="submit"], button[type="submit"]')
-
-                try:
-                    page.click('input[value="Yes"], #idSIButton9', timeout=8_000)
-                except PlaywrightTimeout:
-                    pass
-            except PlaywrightTimeout:
-                logger.info("No login form appeared — using cached session.")
+        if email:
+            self._auto_fill_login(page, email, password)
         else:
             logger.info("No credentials configured — relying on cached session "
                         "or your manual login in the launched browser window.")
 
-        # Give MFA / manual login time to finish, then wait for a Tableau viz.
         manual_login_wait = int(self.cfg.get("manual_login_wait", 0))
         if manual_login_wait > 0:
-            logger.info("Waiting %ds for manual login / MFA …", manual_login_wait)
+            logger.info("Waiting %ds for MFA approval on your phone …",
+                        manual_login_wait)
             time.sleep(manual_login_wait)
 
         page.wait_for_selector("iframe, .tab-widget, #tabViewerToolbarRegion",
                                timeout=self.cfg["page_load_timeout"] * 1000)
         logger.info("Login/landing complete.")
+
+    def _auto_fill_login(self, page, email: str, password: str):
+        """
+        Fill the User ID and click Log In on whichever login flow PepsiCo
+        is serving (custom Okta widget on secure.pepsico.com or, as a
+        fallback, Microsoft Azure AD). Returns silently if no login form
+        appears — that means we landed on a cached session.
+
+        The password step is OPTIONAL: PepsiCo's Okta flow often goes
+        straight from User ID → push notification with no password page,
+        so we only fill it if a password input actually shows up.
+        """
+        user_id_selectors = [
+            'input[name="identifier"]',         # Okta v2 widget
+            'input[name="username"]',           # Okta classic
+            '#okta-signin-username',            # Okta classic id
+            'input[autocomplete="username"]',
+            'input[type="email"]',
+            'input[name="loginfmt"]',           # Microsoft Azure AD
+        ]
+        combined = ", ".join(user_id_selectors)
+
+        try:
+            page.wait_for_selector(combined, timeout=15_000)
+        except PlaywrightTimeout:
+            logger.info("No login form detected — assuming cached session.")
+            return
+
+        field = None
+        matched = None
+        for sel in user_id_selectors:
+            field = page.query_selector(sel)
+            if field:
+                matched = sel
+                break
+        if not field:
+            logger.warning("Login form is up but no matching User ID field. "
+                           "You'll need to type it manually.")
+            return
+
+        logger.info("Filling User ID (selector: %s) and clicking Log In.", matched)
+        field.fill(email)
+
+        submit_selectors = [
+            '#okta-signin-submit',
+            'input[type="submit"]',
+            'button[type="submit"]',
+            'button:has-text("Log In")',
+            'button:has-text("Sign In")',
+            'button:has-text("Next")',
+        ]
+        self._click_first(page, submit_selectors, "Log In / Next button")
+
+        # If a password page appears (Microsoft flow or password-first Okta),
+        # fill it; otherwise the Okta push has already gone out.
+        if password:
+            try:
+                page.wait_for_selector(
+                    'input[type="password"], input[name="passwd"]',
+                    timeout=8_000,
+                )
+                logger.info("Password step appeared — filling it.")
+                page.fill('input[type="password"], input[name="passwd"]', password)
+                self._click_first(page, submit_selectors, "password submit button")
+            except PlaywrightTimeout:
+                logger.info("No password step — Okta push should now be on your phone.")
+        else:
+            logger.info("No password configured — Okta push should now be on your phone.")
+
+        # Microsoft "Stay signed in?" prompt (harmless on Okta — just times out).
+        try:
+            page.click('input[value="Yes"], #idSIButton9', timeout=5_000)
+        except PlaywrightTimeout:
+            pass
 
     def _open(self, page, url: str):
         page.goto(url)
