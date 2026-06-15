@@ -1,0 +1,70 @@
+# =============================================================================
+# Cockpit (Tableau Server) → SharePoint Automation Configuration
+# Fill in every field marked with <YOUR_...> before running.
+# =============================================================================
+
+tableau:
+  # Login page / Cockpit base. You must be on the PepsiCo network or VPN.
+  site_url: "https://cockpit.mypepsico.com"
+
+  # The view you export from (the URL you shared)
+  view_url: "https://cockpit.mypepsico.com/#/views/ValidationPecNewMetrics-FieldLaborEfficiency/Validation?:iid=1"
+
+  # -------------------------------------------------------------------
+  # PRIMARY (recommended): a saved Custom View URL.
+  # In Cockpit, apply all your filters once, click "Save Custom View",
+  # name it (e.g. "Monthly_Export"), then paste the resulting URL here.
+  # If this is set, the script skips all filter-clicking and just exports.
+  # Leave it as "" (empty) to use explicit filter automation instead.
+  # -------------------------------------------------------------------
+  custom_view_url: ""
+
+  # Tableau/PepsiCo SSO login credentials
+  email: "<pedro.garcia9@pepsico.com>"
+  password: "<Physics99{}>"
+
+  # Local download folder on this Windows machine
+  download_dir: "C:/Users/81010435/Downloads/cockpit_exports"
+
+  page_load_timeout: 45     # seconds; Cockpit can be slow to render
+
+  # -------------------------------------------------------------------
+  # FALLBACK: explicit filters (used only if custom_view_url is empty).
+  # These mirror the steps you described. Single values are picked from
+  # a dropdown; lists are multi-select (check each, then Apply).
+  # Filter names must match the dashboard labels EXACTLY.
+  # -------------------------------------------------------------------
+  filters:
+    Year: "All"
+    Month: "All"
+    Category: "All"
+    Level: "Food/Bev/Dairy"
+    Sector: ["FLNA", "PBNA", "QNA"]   # multi-select
+    Cluster: "All"
+    BU: "All"
+    MU: "All"
+    CO/FO/JV: "All"
+    Country: "All"
+
+  # The measure dropdown under the PepsiCo logo (top-right)
+  measure: "Amt"
+
+  # Export settings
+  export_format: "CSV"      # Crosstab → CSV
+  # Final CSV filename. {date} is replaced with YYYY-MM at runtime.
+  output_filename: "FieldLaborEfficiency_{date}.csv"
+
+
+sharepoint:
+  tenant_id: "<YOUR_TENANT_ID>"
+  client_id: "<YOUR_CLIENT_ID>"
+  client_secret: "<YOUR_CLIENT_SECRET>"
+  sharepoint_hostname: "<YOURTENANT>.sharepoint.com"   # e.g. pepsico.sharepoint.com
+  site_name: "<YOUR_SHAREPOINT_SITE_NAME>"
+  drive_name: "Documents"
+  folder_path: "PowerBI/Cockpit Exports"
+
+
+scheduler:
+  run_day: 1
+  run_time: "06:00"
