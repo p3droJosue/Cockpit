@@ -6,6 +6,9 @@ config.local.yaml
 # Logs
 logs/
 
+# Playwright persistent browser profile (cached SSO session — secrets!)
+.playwright-profile/
+
 # Downloads / CSV exports
 downloads/
 cockpit_exports/

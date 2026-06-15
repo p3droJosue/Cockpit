@@ -35,6 +35,20 @@ tableau:
   # flip to true once the flow is stable (and required for the scheduler).
   headless: false
 
+  # Drive your already-installed browser instead of downloading Chromium.
+  # "msedge" uses Microsoft Edge (no `playwright install` needed); "chrome"
+  # uses Google Chrome; "" (empty) falls back to the bundled Chromium.
+  browser_channel: "msedge"
+
+  # Folder where the browser profile (cookies, SSO session) is cached.
+  # First run: log in once; subsequent runs reuse the cached session and
+  # skip SSO/MFA entirely. Keep this OUT of source control (.gitignore'd).
+  user_data_dir: "./.playwright-profile"
+
+  # Extra seconds to wait after navigating before we look for the viz.
+  # Useful on the very first run for you to complete MFA manually.
+  manual_login_wait: 0
+
   # -------------------------------------------------------------------
   # FALLBACK: explicit filters (used only if custom_view_url is empty).
   # Single values pick from a dropdown; lists are multi-select.
