@@ -176,6 +176,10 @@ class TableauDownloader:
         ]
         self._click_first(page, submit_selectors, "Log In / Next button")
 
+        # PepsiCo Okta: two more screens before the push fires.
+        # (Safely skipped on the Microsoft flow — each step times out fast.)
+        self._click_okta_verify_flow(page)
+
         # If a password page appears (Microsoft flow or password-first Okta),
         # fill it; otherwise the Okta push has already gone out.
         if password:
@@ -197,6 +201,62 @@ class TableauDownloader:
             page.click('input[value="Yes"], #idSIButton9', timeout=5_000)
         except PlaywrightTimeout:
             pass
+
+    def _click_okta_verify_flow(self, page):
+        """
+        After the Log In click, PepsiCo's Okta shows two more screens
+        before the push fires on your phone:
+
+          1. "Verify it's you with a security method"
+             → click the blue "Select" button next to
+               "Login without a password / Using Okta Verify Mobile".
+          2. "Get a push notification"
+             → (optional) tick "Send push automatically" so this screen
+               is skipped on future logins, then click "Send Push".
+
+        If either screen doesn't appear within a few seconds, we assume
+        the cached profile already took the fast path and move on.
+        """
+        # Step 1 — pick the Okta Verify method.
+        try:
+            page.wait_for_selector(
+                'button:has-text("Select"), a:has-text("Select")',
+                timeout=10_000,
+            )
+            self._click_first(page, [
+                'button:has-text("Select")',
+                'a:has-text("Select")',
+            ], "security-method Select button")
+            logger.info("Picked Okta Verify (push) as the security method.")
+        except PlaywrightTimeout:
+            logger.info("Security-method picker not shown — already chosen.")
+
+        # Step 2 — optionally tick "Send push automatically" for future runs.
+        if bool(self.cfg.get("okta_remember_push", True)):
+            try:
+                checkbox_label = page.query_selector(
+                    'label:has-text("Send push automatically")'
+                )
+                if checkbox_label:
+                    checkbox_label.click()
+                    logger.info("Ticked 'Send push automatically' — future "
+                                "logins will skip this screen.")
+            except Exception as exc:
+                logger.debug("Could not tick auto-push checkbox: %s", exc)
+
+        # Step 3 — fire the push.
+        try:
+            page.wait_for_selector(
+                'button:has-text("Send Push"), input[value="Send Push"]',
+                timeout=10_000,
+            )
+            self._click_first(page, [
+                'button:has-text("Send Push")',
+                'input[value="Send Push"]',
+            ], "Send Push button")
+            logger.info("Push notification sent — tap Approve on your phone.")
+        except PlaywrightTimeout:
+            logger.info("Send Push button not shown — push likely already fired.")
 
     def _open(self, page, url: str):
         page.goto(url)
