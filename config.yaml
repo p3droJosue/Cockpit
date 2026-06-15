@@ -49,6 +49,12 @@ tableau:
   # Useful on the very first run for you to complete MFA manually.
   manual_login_wait: 0
 
+  # On the Okta "Get a push notification" screen, also tick
+  # "Send push automatically" so subsequent logins skip the verify-method
+  # picker AND the Send Push button. Set false if you'd rather keep
+  # manually confirming each push from the browser.
+  okta_remember_push: true
+
   # -------------------------------------------------------------------
   # FALLBACK: explicit filters (used only if custom_view_url is empty).
   # Single values pick from a dropdown; lists are multi-select.
