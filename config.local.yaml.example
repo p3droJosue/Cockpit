@@ -1,0 +1,28 @@
+# =============================================================================
+# Copy this file to `config.local.yaml` and fill in real values.
+# config.local.yaml is gitignored — it never gets committed.
+#
+# Only the keys you want to override need to be present here; everything
+# else is inherited from config.yaml.
+# =============================================================================
+
+tableau:
+  email: "your.email@pepsico.com"
+  password: "your-real-password"
+
+  # Optional: a saved Custom View URL (recommended — skips all filter clicking)
+  custom_view_url: ""
+
+  # Per-machine download path
+  download_dir: "C:/Users/81010435/Downloads/cockpit_exports"
+
+  # First run: false so you can watch the browser. Flip to true once stable.
+  headless: false
+
+
+sharepoint:
+  tenant_id: "your-tenant-id"
+  client_id: "your-client-id"
+  client_secret: "your-client-secret"
+  sharepoint_hostname: "pepsico.sharepoint.com"
+  site_name: "YourSharePointSiteName"

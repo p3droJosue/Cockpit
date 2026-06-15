@@ -1,0 +1,26 @@
+# Local config with secrets — never commit
+config.local.yaml
+.env
+*.env
+
+# Logs
+logs/
+
+# Downloads / CSV exports
+downloads/
+cockpit_exports/
+*.csv
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.venv/
+venv/
+
+# OS / IDE
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

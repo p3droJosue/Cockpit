@@ -1,6 +1,10 @@
 # =============================================================================
-# Cockpit (Tableau Server) → SharePoint Automation Configuration
-# Fill in every field marked with <YOUR_...> before running.
+# Cockpit (Tableau Server) → SharePoint Automation — Template config
+# -----------------------------------------------------------------------------
+# This file is the SHARED template and is safe to commit.
+# Put real credentials and per-machine values in `config.local.yaml`
+# (gitignored) — it will be deep-merged on top of this file at runtime.
+# See `config.local.yaml.example` for the layout.
 # =============================================================================
 
 tableau:
@@ -13,25 +17,27 @@ tableau:
   # -------------------------------------------------------------------
   # PRIMARY (recommended): a saved Custom View URL.
   # In Cockpit, apply all your filters once, click "Save Custom View",
-  # name it (e.g. "Monthly_Export"), then paste the resulting URL here.
-  # If this is set, the script skips all filter-clicking and just exports.
-  # Leave it as "" (empty) to use explicit filter automation instead.
+  # name it (e.g. "Monthly_Export"), then paste the resulting URL into
+  # config.local.yaml. If set, the script skips all filter-clicking.
   # -------------------------------------------------------------------
   custom_view_url: ""
 
-  # Tableau/PepsiCo SSO login credentials
-  email: "<***REMOVED***>"
-  password: "<***REMOVED***>"
+  # SSO credentials — leave EMPTY here; set them in config.local.yaml
+  email: ""
+  password: ""
 
-  # Local download folder on this Windows machine
-  download_dir: "C:/Users/81010435/Downloads/cockpit_exports"
+  # Local download folder — override in config.local.yaml per machine.
+  download_dir: "./downloads/cockpit_exports"
 
   page_load_timeout: 45     # seconds; Cockpit can be slow to render
 
+  # Set to false on the first run to watch the browser and verify selectors;
+  # flip to true once the flow is stable (and required for the scheduler).
+  headless: false
+
   # -------------------------------------------------------------------
   # FALLBACK: explicit filters (used only if custom_view_url is empty).
-  # These mirror the steps you described. Single values are picked from
-  # a dropdown; lists are multi-select (check each, then Apply).
+  # Single values pick from a dropdown; lists are multi-select.
   # Filter names must match the dashboard labels EXACTLY.
   # -------------------------------------------------------------------
   filters:
@@ -39,7 +45,7 @@ tableau:
     Month: "All"
     Category: "All"
     Level: "Food/Bev/Dairy"
-    Sector: ["FLNA", "PBNA", "QNA"]   # multi-select
+    Sector: ["FLNA", "PBNA", "QNA"]
     Cluster: "All"
     BU: "All"
     MU: "All"
@@ -56,11 +62,12 @@ tableau:
 
 
 sharepoint:
-  tenant_id: "<YOUR_TENANT_ID>"
-  client_id: "<YOUR_CLIENT_ID>"
-  client_secret: "<YOUR_CLIENT_SECRET>"
-  sharepoint_hostname: "<YOURTENANT>.sharepoint.com"   # e.g. pepsico.sharepoint.com
-  site_name: "<YOUR_SHAREPOINT_SITE_NAME>"
+  # All secret values below should be set in config.local.yaml
+  tenant_id: ""
+  client_id: ""
+  client_secret: ""
+  sharepoint_hostname: ""     # e.g. pepsico.sharepoint.com
+  site_name: ""
   drive_name: "Documents"
   folder_path: "PowerBI/Cockpit Exports"
 
