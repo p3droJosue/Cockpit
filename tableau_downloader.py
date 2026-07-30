@@ -21,15 +21,11 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-import yaml
 from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeout
 
+from config_loader import load_config
+
 logger = logging.getLogger(__name__)
-
-
-def load_config(config_path: str = "config.yaml") -> dict:
-    with open(config_path, "r", encoding="utf-8") as f:
-        return yaml.safe_load(f)
 
 
 def sanitize_filename(name: str) -> str:
@@ -49,7 +45,7 @@ class TableauDownloader:
     def download(self) -> Path:
         """Run the full download and return the path to the CSV."""
         with sync_playwright() as p:
-            browser, context, page = self._launch_browser(p)
+            context, page = self._launch_browser(p)
             try:
                 self._login(page)
 
@@ -68,53 +64,227 @@ class TableauDownloader:
                 return dest
             finally:
                 context.close()
-                browser.close()
 
     # ------------------------------------------------------------------
     # Browser / navigation
     # ------------------------------------------------------------------
 
     def _launch_browser(self, playwright):
-        # First run: set headless=False to watch and fix selectors, then True.
-        browser = playwright.chromium.launch(headless=False)
-        context = browser.new_context(
-            accept_downloads=True,
-            viewport={"width": 1680, "height": 950},
-        )
-        page = context.new_page()
+        # Uses a *persistent* context so the SSO/MFA login from your first
+        # run is cached in `user_data_dir` and reused on every subsequent
+        # run. `browser_channel` lets us drive your already-installed Edge
+        # instead of downloading Chromium (which avoids the corporate-CA
+        # cert dance for `playwright install chromium`).
+        headless = bool(self.cfg.get("headless", False))
+        channel = (self.cfg.get("browser_channel") or "").strip() or None
+        user_data_dir = Path(
+            self.cfg.get("user_data_dir", "./.playwright-profile")
+        ).expanduser().resolve()
+        user_data_dir.mkdir(parents=True, exist_ok=True)
+
+        launch_kwargs = {
+            "user_data_dir": str(user_data_dir),
+            "headless": headless,
+            "accept_downloads": True,
+            "viewport": {"width": 1680, "height": 950},
+        }
+        if channel:
+            launch_kwargs["channel"] = channel
+
+        context = playwright.chromium.launch_persistent_context(**launch_kwargs)
+        page = context.pages[0] if context.pages else context.new_page()
         page.set_default_timeout(self.cfg["page_load_timeout"] * 1000)
-        return browser, context, page
+        return context, page
 
     def _login(self, page):
-        logger.info("Opening Cockpit and signing in …")
+        logger.info("Opening Cockpit …")
         page.goto(self.cfg["site_url"])
 
-        # PepsiCo uses SSO (Microsoft / SAML). The flow is usually:
-        # email → Next → password → Sign in → (optional MFA).
-        # Adjust these selectors after watching the first run.
+        # If the persistent profile already has a valid Okta session, we'll
+        # land straight on Tableau and never see a login form — skip auto-
+        # fill in that case. Otherwise: fill the User ID + click Log In to
+        # trigger the Okta Verify push, then sit on `manual_login_wait` for
+        # you to tap "Approve" on your phone.
+        email = (self.cfg.get("email") or "").strip()
+        password = (self.cfg.get("password") or "").strip()
+
+        if email:
+            self._auto_fill_login(page, email, password)
+        else:
+            logger.info("No credentials configured — relying on cached session "
+                        "or your manual login in the launched browser window.")
+
+        manual_login_wait = int(self.cfg.get("manual_login_wait", 0))
+        if manual_login_wait > 0:
+            logger.info("Waiting %ds for MFA approval on your phone …",
+                        manual_login_wait)
+            time.sleep(manual_login_wait)
+
+        # Wait for the post-MFA redirect back to Cockpit BEFORE looking for
+        # the viz. Without this, if login stalls we sit on secure.pepsico.com
+        # and the plain `iframe` selector below matches Okta's hidden
+        # <iframe class="hide" data-se="account-chooser">, which never
+        # becomes visible and burns the whole timeout.
         try:
-            page.wait_for_selector('input[type="email"], input[name="loginfmt"]', timeout=20_000)
-            email_box = page.query_selector('input[type="email"], input[name="loginfmt"]')
-            email_box.fill(self.cfg["email"])
-            page.click('input[type="submit"], button[type="submit"]')
-
-            page.wait_for_selector('input[type="password"], input[name="passwd"]', timeout=15_000)
-            page.fill('input[type="password"], input[name="passwd"]', self.cfg["password"])
-            page.click('input[type="submit"], button[type="submit"]')
-
-            # Possible "Stay signed in?" prompt
-            try:
-                page.click('input[value="Yes"], #idSIButton9', timeout=8_000)
-            except PlaywrightTimeout:
-                pass
+            page.wait_for_url(re.compile(r"cockpit\.mypepsico\.com"),
+                              timeout=self.cfg["page_load_timeout"] * 1000)
         except PlaywrightTimeout:
-            logger.warning("Standard SSO selectors not found — you may already be "
-                           "logged in via SSO, or the flow differs. Continuing.")
+            raise RuntimeError(
+                "Never redirected to cockpit.mypepsico.com — login stalled "
+                "(probably at Okta's Send Push screen). Approve the push, "
+                "or check the earlier log lines for which step didn't click."
+            )
 
-        # Wait until a Tableau view is loaded
-        page.wait_for_selector("iframe, .tab-widget, #tabViewerToolbarRegion",
-                               timeout=self.cfg["page_load_timeout"] * 1000)
+        # Tableau-specific selectors only — no bare `iframe`, so we can't
+        # accidentally match Okta's hidden account-chooser iframe.
+        page.wait_for_selector(
+            ".tab-widget, #tabViewerToolbarRegion, "
+            "iframe[src*='cockpit.mypepsico.com'], "
+            "iframe[src*='tableau']",
+            state="visible",
+            timeout=self.cfg["page_load_timeout"] * 1000,
+        )
         logger.info("Login/landing complete.")
+
+    def _auto_fill_login(self, page, email: str, password: str):
+        """
+        Fill the User ID and click Log In on whichever login flow PepsiCo
+        is serving (custom Okta widget on secure.pepsico.com or, as a
+        fallback, Microsoft Azure AD). Returns silently if no login form
+        appears — that means we landed on a cached session.
+
+        The password step is OPTIONAL: PepsiCo's Okta flow often goes
+        straight from User ID → push notification with no password page,
+        so we only fill it if a password input actually shows up.
+        """
+        user_id_selectors = [
+            'input[name="identifier"]',         # Okta v2 widget
+            'input[name="username"]',           # Okta classic
+            '#okta-signin-username',            # Okta classic id
+            'input[autocomplete="username"]',
+            'input[type="email"]',
+            'input[name="loginfmt"]',           # Microsoft Azure AD
+        ]
+        combined = ", ".join(user_id_selectors)
+
+        try:
+            page.wait_for_selector(combined, timeout=15_000)
+        except PlaywrightTimeout:
+            logger.info("No login form detected — assuming cached session.")
+            return
+
+        field = None
+        matched = None
+        for sel in user_id_selectors:
+            field = page.query_selector(sel)
+            if field:
+                matched = sel
+                break
+        if not field:
+            logger.warning("Login form is up but no matching User ID field. "
+                           "You'll need to type it manually.")
+            return
+
+        logger.info("Filling User ID (selector: %s) and clicking Log In.", matched)
+        field.fill(email)
+
+        submit_selectors = [
+            '#okta-signin-submit',
+            'input[type="submit"]',
+            'button[type="submit"]',
+            'button:has-text("Log In")',
+            'button:has-text("Sign In")',
+            'button:has-text("Next")',
+        ]
+        self._click_first(page, submit_selectors, "Log In / Next button")
+
+        # PepsiCo Okta: two more screens before the push fires.
+        # (Safely skipped on the Microsoft flow — each step times out fast.)
+        self._click_okta_verify_flow(page)
+
+        # If a password page appears (Microsoft flow or password-first Okta),
+        # fill it; otherwise the Okta push has already gone out.
+        if password:
+            try:
+                page.wait_for_selector(
+                    'input[type="password"], input[name="passwd"]',
+                    timeout=8_000,
+                )
+                logger.info("Password step appeared — filling it.")
+                page.fill('input[type="password"], input[name="passwd"]', password)
+                self._click_first(page, submit_selectors, "password submit button")
+            except PlaywrightTimeout:
+                logger.info("No password step — Okta push should now be on your phone.")
+        else:
+            logger.info("No password configured — Okta push should now be on your phone.")
+
+        # Microsoft "Stay signed in?" prompt (harmless on Okta — just times out).
+        try:
+            page.click('input[value="Yes"], #idSIButton9', timeout=5_000)
+        except PlaywrightTimeout:
+            pass
+
+    def _click_okta_verify_flow(self, page):
+        """
+        After the Log In click, PepsiCo's Okta may show one or two extra
+        screens before the push fires on your phone:
+
+          1. (Sometimes) "Verify it's you with a security method"
+             → click the blue "Select" button next to
+               "Login without a password / Using Okta Verify Mobile".
+             Skipped when the profile already remembers a chosen method.
+          2. "Get a push notification"
+             → (optional) tick "Send push automatically" so this screen
+               is skipped on future logins, then click "Send Push".
+        """
+        # Step 1 (optional) — pick the Okta Verify method.
+        try:
+            page.wait_for_selector(
+                'button:has-text("Select"), a:has-text("Select")',
+                state="visible",
+                timeout=5_000,
+            )
+            self._click_first(page, [
+                'button:has-text("Select")',
+                'a:has-text("Select")',
+            ], "security-method Select button")
+            logger.info("Picked Okta Verify (push) as the security method.")
+        except PlaywrightTimeout:
+            logger.info("Security-method picker not shown — already chosen.")
+
+        # Step 2 — optionally tick "Send push automatically" for future runs.
+        if bool(self.cfg.get("okta_remember_push", True)):
+            try:
+                checkbox_label = page.query_selector(
+                    'label:has-text("Send push automatically")'
+                )
+                if checkbox_label:
+                    checkbox_label.click()
+                    logger.info("Ticked 'Send push automatically' — future "
+                                "logins will skip this screen.")
+            except Exception as exc:
+                logger.debug("Could not tick auto-push checkbox: %s", exc)
+
+        # Step 3 — fire the push. Wait for the button to be VISIBLE (not
+        # just present in DOM) and give it a longer window since the Okta
+        # widget can animate in slowly on a slow connection.
+        push_selectors = [
+            'button:has-text("Send Push")',
+            'input[value="Send Push"]',
+            'input[type="submit"][value*="Push"]',
+            '[data-se="okta_verify-signed_nonce"] button',
+        ]
+        try:
+            page.wait_for_selector(
+                ", ".join(push_selectors),
+                state="visible",
+                timeout=20_000,
+            )
+            self._click_first(page, push_selectors, "Send Push button")
+            logger.info("Push notification sent — tap Approve on your phone.")
+        except PlaywrightTimeout:
+            logger.warning("Send Push button not found in time — "
+                           "click it manually in the browser window.")
 
     def _open(self, page, url: str):
         page.goto(url)

@@ -1,0 +1,39 @@
+# =============================================================================
+# Copy this file to `config.local.yaml` and fill in real values.
+# config.local.yaml is gitignored — it never gets committed.
+#
+# Only the keys you want to override need to be present here; everything
+# else is inherited from config.yaml.
+# =============================================================================
+
+tableau:
+  # PepsiCo Okta login:
+  #   email    — your User ID (PepsiCo email or GPID). The script auto-fills
+  #              this field and clicks "Log In", which fires the Okta Verify
+  #              push to your phone.
+  #   password — leave EMPTY for the standard Okta-push flow. Only fill it
+  #              if your tenant shows a password page before the push.
+  email: "you@pepsico.com"
+  password: ""
+
+  # Optional: a saved Custom View URL (recommended — skips all filter clicking)
+  custom_view_url: ""
+
+  # Per-machine download path
+  download_dir: "C:/Users/81010435/Downloads/cockpit_exports"
+
+  # First run: false so you can watch the browser. Flip to true once stable.
+  headless: false
+
+  # Seconds to wait after submitting User ID, giving you time to tap
+  # "Approve" on the Okta push. Once the Okta session is cached in
+  # .playwright-profile/, set this back to 0.
+  manual_login_wait: 60
+
+
+sharepoint:
+  tenant_id: "your-tenant-id"
+  client_id: "your-client-id"
+  client_secret: "your-client-secret"
+  sharepoint_hostname: "pepsico.sharepoint.com"
+  site_name: "YourSharePointSiteName"

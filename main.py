@@ -15,8 +15,7 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-import yaml
-
+from config_loader import load_config
 from tableau_downloader import TableauDownloader
 from sharepoint_uploader import SharePointUploader
 
@@ -36,11 +35,6 @@ logging.basicConfig(
     ],
 )
 logger = logging.getLogger("main")
-
-
-def load_config(path: str = "config.yaml") -> dict:
-    with open(path, "r", encoding="utf-8") as f:
-        return yaml.safe_load(f)
 
 
 def main():
