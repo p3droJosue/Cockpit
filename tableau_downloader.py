@@ -265,26 +265,73 @@ class TableauDownloader:
             except Exception as exc:
                 logger.debug("Could not tick auto-push checkbox: %s", exc)
 
-        # Step 3 — fire the push. Wait for the button to be VISIBLE (not
-        # just present in DOM) and give it a longer window since the Okta
-        # widget can animate in slowly on a slow connection.
+        # Step 3 — fire the push. Try CSS selectors first, then fall back
+        # to an ARIA role match (Playwright's get_by_role uses accessible
+        # name, which survives label/text tweaks in the Okta widget).
+        if self._try_click_send_push(page):
+            logger.info("Push notification sent — tap Approve on your phone.")
+        else:
+            logger.warning("Send Push button not found — click it manually "
+                           "in the browser window.")
+            self._dump_debug_state(page, "send_push_not_found")
+
+    def _try_click_send_push(self, page) -> bool:
+        """
+        Click Okta's "Send Push" button. Returns True on success. Tries
+        several CSS selectors, then an ARIA-role fallback, before giving up.
+        """
         push_selectors = [
             'button:has-text("Send Push")',
             'input[value="Send Push"]',
             'input[type="submit"][value*="Push"]',
             '[data-se="okta_verify-signed_nonce"] button',
+            'input.button.button-primary',
         ]
+        # Wait for ANY of them to appear (visible). If none show up in 20s
+        # we still try the role-based fallback below before giving up.
         try:
             page.wait_for_selector(
                 ", ".join(push_selectors),
                 state="visible",
                 timeout=20_000,
             )
-            self._click_first(page, push_selectors, "Send Push button")
-            logger.info("Push notification sent — tap Approve on your phone.")
         except PlaywrightTimeout:
-            logger.warning("Send Push button not found in time — "
-                           "click it manually in the browser window.")
+            pass
+
+        for sel in push_selectors:
+            try:
+                page.click(sel, timeout=3_000)
+                logger.info("Clicked Send Push via selector: %s", sel)
+                return True
+            except PlaywrightTimeout:
+                continue
+
+        # ARIA-role fallback — matches by accessible name regardless of tag.
+        try:
+            page.get_by_role(
+                "button", name=re.compile(r"send\s*push", re.I)
+            ).click(timeout=5_000)
+            logger.info("Clicked Send Push via ARIA role.")
+            return True
+        except Exception:
+            return False
+
+    def _dump_debug_state(self, page, label: str):
+        """
+        Save a full-page screenshot + rendered HTML to logs/debug/ so we
+        can inspect exactly what the browser was showing when a step failed.
+        """
+        debug_dir = Path("logs/debug")
+        debug_dir.mkdir(parents=True, exist_ok=True)
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        stem = debug_dir / f"{ts}_{label}"
+        try:
+            page.screenshot(path=str(stem) + ".png", full_page=True)
+            (stem.with_suffix(".html")).write_text(page.content(),
+                                                  encoding="utf-8")
+            logger.info("Saved debug snapshot: %s.png / .html", stem)
+        except Exception as exc:
+            logger.warning("Could not save debug snapshot: %s", exc)
 
     def _open(self, page, url: str):
         page.goto(url)
