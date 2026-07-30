@@ -120,8 +120,30 @@ class TableauDownloader:
                         manual_login_wait)
             time.sleep(manual_login_wait)
 
-        page.wait_for_selector("iframe, .tab-widget, #tabViewerToolbarRegion",
-                               timeout=self.cfg["page_load_timeout"] * 1000)
+        # Wait for the post-MFA redirect back to Cockpit BEFORE looking for
+        # the viz. Without this, if login stalls we sit on <okta-login-host>
+        # and the plain `iframe` selector below matches Okta's hidden
+        # <iframe class="hide" data-se="account-chooser">, which never
+        # becomes visible and burns the whole timeout.
+        try:
+            page.wait_for_url(re.compile(r"<your-tableau-server>"),
+                              timeout=self.cfg["page_load_timeout"] * 1000)
+        except PlaywrightTimeout:
+            raise RuntimeError(
+                "Never redirected to <your-tableau-server> — login stalled "
+                "(probably at Okta's Send Push screen). Approve the push, "
+                "or check the earlier log lines for which step didn't click."
+            )
+
+        # Tableau-specific selectors only — no bare `iframe`, so we can't
+        # accidentally match Okta's hidden account-chooser iframe.
+        page.wait_for_selector(
+            ".tab-widget, #tabViewerToolbarRegion, "
+            "iframe[src*='<your-tableau-server>'], "
+            "iframe[src*='tableau']",
+            state="visible",
+            timeout=self.cfg["page_load_timeout"] * 1000,
+        )
         logger.info("Login/landing complete.")
 
     def _auto_fill_login(self, page, email: str, password: str):
