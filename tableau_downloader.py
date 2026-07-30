@@ -204,24 +204,23 @@ class TableauDownloader:
 
     def _click_okta_verify_flow(self, page):
         """
-        After the Log In click, PepsiCo's Okta shows two more screens
-        before the push fires on your phone:
+        After the Log In click, PepsiCo's Okta may show one or two extra
+        screens before the push fires on your phone:
 
-          1. "Verify it's you with a security method"
+          1. (Sometimes) "Verify it's you with a security method"
              → click the blue "Select" button next to
                "Login without a password / Using Okta Verify Mobile".
+             Skipped when the profile already remembers a chosen method.
           2. "Get a push notification"
              → (optional) tick "Send push automatically" so this screen
                is skipped on future logins, then click "Send Push".
-
-        If either screen doesn't appear within a few seconds, we assume
-        the cached profile already took the fast path and move on.
         """
-        # Step 1 — pick the Okta Verify method.
+        # Step 1 (optional) — pick the Okta Verify method.
         try:
             page.wait_for_selector(
                 'button:has-text("Select"), a:has-text("Select")',
-                timeout=10_000,
+                state="visible",
+                timeout=5_000,
             )
             self._click_first(page, [
                 'button:has-text("Select")',
@@ -244,19 +243,26 @@ class TableauDownloader:
             except Exception as exc:
                 logger.debug("Could not tick auto-push checkbox: %s", exc)
 
-        # Step 3 — fire the push.
+        # Step 3 — fire the push. Wait for the button to be VISIBLE (not
+        # just present in DOM) and give it a longer window since the Okta
+        # widget can animate in slowly on a slow connection.
+        push_selectors = [
+            'button:has-text("Send Push")',
+            'input[value="Send Push"]',
+            'input[type="submit"][value*="Push"]',
+            '[data-se="okta_verify-signed_nonce"] button',
+        ]
         try:
             page.wait_for_selector(
-                'button:has-text("Send Push"), input[value="Send Push"]',
-                timeout=10_000,
+                ", ".join(push_selectors),
+                state="visible",
+                timeout=20_000,
             )
-            self._click_first(page, [
-                'button:has-text("Send Push")',
-                'input[value="Send Push"]',
-            ], "Send Push button")
+            self._click_first(page, push_selectors, "Send Push button")
             logger.info("Push notification sent — tap Approve on your phone.")
         except PlaywrightTimeout:
-            logger.info("Send Push button not shown — push likely already fired.")
+            logger.warning("Send Push button not found in time — "
+                           "click it manually in the browser window.")
 
     def _open(self, page, url: str):
         page.goto(url)
