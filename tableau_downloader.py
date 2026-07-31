@@ -429,16 +429,20 @@ class TableauDownloader:
         # selectors must run inside that frame or they'll never resolve.
         target = self._tableau_frame(page)
 
-        # 1) Open the Download toolbar menu (the down-arrow icon)
+        # 1) Open the Download toolbar menu (top-right icon whose tooltip
+        # is "Choose a format to download" on Cockpit).
         try:
             self._click_first(target, [
                 '[data-tb-test-id="download-ToolbarButton"]',
+                '[aria-label="Choose a format to download"]',
+                'button[title="Choose a format to download"]',
+                '[title="Choose a format to download"]',
+                'button[aria-label*="download" i]',
+                'button[title*="download" i]',
                 'button[aria-label="Download"]',
                 '[aria-label="Download"]',
-                'button:has-text("Download")',
-                'div[role="button"]:has-text("Download")',
                 '.tab-icon-download',
-                'span:has-text("Download")',
+                'button:has-text("Download")',
             ], "Download toolbar button")
         except RuntimeError:
             self._dump_debug_state(page, "download_button_not_found")
@@ -446,7 +450,7 @@ class TableauDownloader:
 
         time.sleep(1)
 
-        # 2) Choose "Crosstab"
+        # 2) Choose "Crosstab" from the flyout menu.
         try:
             self._click_first(target, [
                 '[data-tb-test-id="download-flyout-DownloadCrosstab-Button"]',
@@ -460,7 +464,26 @@ class TableauDownloader:
 
         time.sleep(2)  # crosstab dialog opens
 
-        # 3) In the dialog, select CSV format
+        # 3) The crosstab dialog asks you to pick which sheet to export.
+        # For Field Labor Efficiency it's "Volume Cockpit". Skipped if
+        # export_sheet is empty (single-sheet views don't show a picker).
+        sheet = (self.cfg.get("export_sheet") or "").strip()
+        if sheet:
+            try:
+                self._click_first(target, [
+                    f'[data-tb-test-id="crosstab-options-dialog-thumbnail-{sheet}"]',
+                    f'[aria-label="{sheet}"]',
+                    f'button:has-text("{sheet}")',
+                    f'div:has-text("{sheet}")',
+                    f'text="{sheet}"',
+                ], f"sheet '{sheet}' in Crosstab dialog")
+                logger.info("Selected sheet: %s", sheet)
+            except RuntimeError:
+                self._dump_debug_state(page, "sheet_pick_not_found")
+                raise
+            time.sleep(1)
+
+        # 4) Select CSV format
         fmt = self.cfg.get("export_format", "CSV").upper()
         try:
             self._click_first(target, [
@@ -469,9 +492,9 @@ class TableauDownloader:
                 f'text="{fmt}"',
             ], f"{fmt} radio option")
         except Exception:
-            logger.warning("Could not find %s radio; the dialog may default to it.", fmt)
+            logger.warning("Could not find %s radio; dialog may default to it.", fmt)
 
-        # 4) Click the dialog's Download button and capture the file
+        # 5) Click the dialog's Download button and capture the file.
         with page.expect_download(timeout=120_000) as dl_info:
             try:
                 self._click_first(target, [
