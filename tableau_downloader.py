@@ -318,8 +318,9 @@ class TableauDownloader:
 
     def _dump_debug_state(self, page, label: str):
         """
-        Save a full-page screenshot + rendered HTML to logs/debug/ so we
-        can inspect exactly what the browser was showing when a step failed.
+        Save a full-page screenshot, the main-frame HTML, AND each child
+        frame's HTML (Cockpit's viz lives in an iframe, so the interesting
+        markup is usually in a child frame, not the main page).
         """
         debug_dir = Path("logs/debug")
         debug_dir.mkdir(parents=True, exist_ok=True)
@@ -329,7 +330,16 @@ class TableauDownloader:
             page.screenshot(path=str(stem) + ".png", full_page=True)
             (stem.with_suffix(".html")).write_text(page.content(),
                                                   encoding="utf-8")
-            logger.info("Saved debug snapshot: %s.png / .html", stem)
+            for i, frame in enumerate(page.frames):
+                if frame is page.main_frame:
+                    continue
+                try:
+                    frame_html = frame.content()
+                except Exception:
+                    continue
+                frame_path = debug_dir / f"{ts}_{label}_frame{i}.html"
+                frame_path.write_text(frame_html, encoding="utf-8")
+            logger.info("Saved debug snapshot: %s.png / .html (+ frames)", stem)
         except Exception as exc:
             logger.warning("Could not save debug snapshot: %s", exc)
 
@@ -512,24 +522,40 @@ class TableauDownloader:
 
     def _tableau_frame(self, page):
         """
-        Return the frame that hosts the Tableau viz. Cockpit sometimes
-        wraps the viz in an iframe whose URL contains '/views/', '/t/',
-        '/vizportal/' or '/vizql/'. Falls back to the main frame if no
-        such iframe is found.
+        Return the Frame that hosts the Tableau viz. Cockpit wraps it in
+        an <iframe title="Data Visualization"> whose src points at
+        cockpit.mypepsico.com/views/... The previous URL-iteration
+        approach failed because page.frames may not yet reflect the
+        iframe's real URL just after navigation — it shows about:blank
+        until the child navigation completes. Resolving the frame from
+        the DOM element via content_frame() sidesteps that race.
         """
-        markers = (
-            "cockpit.mypepsico.com/views",
-            "cockpit.mypepsico.com/t/",
-            "cockpit.mypepsico.com/trusted",
-            "/vizportal/",
-            "/vizql/",
-        )
-        for frame in page.frames:
-            url = (frame.url or "").lower()
-            if any(m in url for m in markers):
-                logger.info("Tableau viz frame found: %s", frame.url)
-                return frame
-        logger.info("No Tableau iframe detected — using main frame.")
+        iframe_selectors = [
+            'iframe[title="Data Visualization"]',
+            'iframe[src*="cockpit.mypepsico.com/views"]',
+            'iframe[src*="/views/"]',
+            'iframe[src*="/vizql/"]',
+            'iframe[src*="tableau"]',
+        ]
+        for sel in iframe_selectors:
+            try:
+                handle = page.wait_for_selector(sel, timeout=5_000)
+            except PlaywrightTimeout:
+                continue
+            if not handle:
+                continue
+            frame = handle.content_frame()
+            if not frame:
+                continue
+            try:
+                frame.wait_for_load_state("domcontentloaded", timeout=15_000)
+            except PlaywrightTimeout:
+                pass
+            logger.info("Tableau viz frame resolved via: %s (url=%s)",
+                        sel, frame.url)
+            return frame
+
+        logger.warning("No Tableau iframe matched — using main frame.")
         return page.main_frame
 
     # ------------------------------------------------------------------
