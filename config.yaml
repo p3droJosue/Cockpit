@@ -77,6 +77,10 @@ tableau:
 
   # Export settings
   export_format: "CSV"      # Crosstab → CSV
+  # Sheet to pick in the Crosstab dialog. For the Field Labor Efficiency
+  # dashboard this is "Volume Cockpit". Set to "" if the view has only
+  # one sheet and doesn't show a picker.
+  export_sheet: "Volume Cockpit"
   # Final CSV filename. {date} is replaced with YYYY-MM at runtime.
   output_filename: "FieldLaborEfficiency_{date}.csv"
 
