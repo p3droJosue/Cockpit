@@ -425,27 +425,45 @@ class TableauDownloader:
         filename = self.cfg["output_filename"].format(date=date_tag)
         dest = self.download_dir / sanitize_filename(filename)
 
+        # Cockpit embeds Tableau in an <iframe> on some routes. Toolbar
+        # selectors must run inside that frame or they'll never resolve.
+        target = self._tableau_frame(page)
+
         # 1) Open the Download toolbar menu (the down-arrow icon)
-        self._click_first(page, [
-            '[data-tb-test-id="download-ToolbarButton"]',
-            'button[aria-label="Download"]',
-            '[aria-label="Download"]',
-        ], "Download toolbar button")
+        try:
+            self._click_first(target, [
+                '[data-tb-test-id="download-ToolbarButton"]',
+                'button[aria-label="Download"]',
+                '[aria-label="Download"]',
+                'button:has-text("Download")',
+                'div[role="button"]:has-text("Download")',
+                '.tab-icon-download',
+                'span:has-text("Download")',
+            ], "Download toolbar button")
+        except RuntimeError:
+            self._dump_debug_state(page, "download_button_not_found")
+            raise
 
         time.sleep(1)
 
         # 2) Choose "Crosstab"
-        self._click_first(page, [
-            '[data-tb-test-id="download-flyout-DownloadCrosstab-Button"]',
-            'text="Crosstab"',
-        ], "Crosstab option")
+        try:
+            self._click_first(target, [
+                '[data-tb-test-id="download-flyout-DownloadCrosstab-Button"]',
+                'button:has-text("Crosstab")',
+                'a:has-text("Crosstab")',
+                'text="Crosstab"',
+            ], "Crosstab option")
+        except RuntimeError:
+            self._dump_debug_state(page, "crosstab_option_not_found")
+            raise
 
         time.sleep(2)  # crosstab dialog opens
 
         # 3) In the dialog, select CSV format
         fmt = self.cfg.get("export_format", "CSV").upper()
         try:
-            self._click_first(page, [
+            self._click_first(target, [
                 f'[data-tb-test-id="export-crosstab-options-dialog-radio-{fmt}-RadioButton"]',
                 f'label:has-text("{fmt}")',
                 f'text="{fmt}"',
@@ -455,26 +473,55 @@ class TableauDownloader:
 
         # 4) Click the dialog's Download button and capture the file
         with page.expect_download(timeout=120_000) as dl_info:
-            self._click_first(page, [
-                '[data-tb-test-id="export-crosstab-export-Button"]',
-                'button:has-text("Download")',
-                'text="Download"',
-            ], "dialog Download button")
+            try:
+                self._click_first(target, [
+                    '[data-tb-test-id="export-crosstab-export-Button"]',
+                    'button:has-text("Download")',
+                    'text="Download"',
+                ], "dialog Download button")
+            except RuntimeError:
+                self._dump_debug_state(page, "dialog_download_not_found")
+                raise
 
         download = dl_info.value
         shutil.move(str(download.path()), str(dest))
         return dest
 
+    def _tableau_frame(self, page):
+        """
+        Return the frame that hosts the Tableau viz. Cockpit sometimes
+        wraps the viz in an iframe whose URL contains '/views/', '/t/',
+        '/vizportal/' or '/vizql/'. Falls back to the main frame if no
+        such iframe is found.
+        """
+        markers = (
+            "cockpit.mypepsico.com/views",
+            "cockpit.mypepsico.com/t/",
+            "cockpit.mypepsico.com/trusted",
+            "/vizportal/",
+            "/vizql/",
+        )
+        for frame in page.frames:
+            url = (frame.url or "").lower()
+            if any(m in url for m in markers):
+                logger.info("Tableau viz frame found: %s", frame.url)
+                return frame
+        logger.info("No Tableau iframe detected — using main frame.")
+        return page.main_frame
+
     # ------------------------------------------------------------------
     # Utility
     # ------------------------------------------------------------------
 
-    def _click_first(self, page, selectors: list, label: str):
-        """Try a list of selectors in order; click the first that exists."""
+    def _click_first(self, target, selectors: list, label: str):
+        """
+        Try a list of selectors in order; click the first that exists.
+        `target` may be a Page or a Frame — both expose .click(sel, timeout=...).
+        """
         last_err = None
         for sel in selectors:
             try:
-                page.click(sel, timeout=8_000)
+                target.click(sel, timeout=8_000)
                 return
             except PlaywrightTimeout as e:
                 last_err = e
