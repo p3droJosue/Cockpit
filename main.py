@@ -1,10 +1,11 @@
 """
 main.py
 -------
-Orchestrates the full pipeline:
-  1. Download CSV from Cockpit (browser automation)
-  2. Upload CSV to SharePoint (Microsoft Graph API)
-  3. Log results
+Orchestrates the full monthly pipeline:
+  1. Download the Cockpit CSV via browser automation.
+  2. Clean it (rename columns, filter to previous fiscal month) and
+     append it into Volume Cockpit.xlsx in the synced SharePoint folder,
+     backing up the previous version first.
 
 Run manually:
     python main.py
@@ -17,11 +18,8 @@ from pathlib import Path
 
 from config_loader import load_config
 from tableau_downloader import TableauDownloader
-from sharepoint_uploader import SharePointUploader
+import data_processor
 
-# ---------------------------------------------------------------------------
-# Logging — writes to both console and a log file
-# ---------------------------------------------------------------------------
 LOG_DIR = Path("logs")
 LOG_DIR.mkdir(exist_ok=True)
 LOG_FILE = LOG_DIR / f"run_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
@@ -39,7 +37,7 @@ logger = logging.getLogger("main")
 
 def main():
     logger.info("=" * 60)
-    logger.info("Cockpit → SharePoint automation starting")
+    logger.info("Cockpit monthly pipeline starting")
     logger.info("=" * 60)
 
     cfg = load_config()
@@ -48,41 +46,33 @@ def main():
     # Step 1 — Download CSV from Cockpit
     # ------------------------------------------------------------------
     logger.info("STEP 1: Downloading from Cockpit (Tableau Server) …")
-    downloader = TableauDownloader(cfg)
     try:
-        downloaded_files = [downloader.download()]
+        csv_path = TableauDownloader(cfg).download()
     except Exception as exc:
         logger.error("Download failed: %s", exc)
         sys.exit(1)
-
-    logger.info("Downloaded %d file(s):", len(downloaded_files))
-    for f in downloaded_files:
-        logger.info("  %s", f)
+    logger.info("Downloaded: %s", csv_path)
 
     # ------------------------------------------------------------------
-    # Step 2 — Upload CSV to SharePoint
+    # Step 2 — Clean CSV and append into Volume Cockpit.xlsx
     # ------------------------------------------------------------------
-    logger.info("STEP 2: Uploading to SharePoint …")
-    uploader = SharePointUploader(cfg)
-    uploaded_urls = uploader.upload_all(downloaded_files)
-
-    logger.info("Uploaded %d file(s):", len(uploaded_urls))
-    for u in uploaded_urls:
-        logger.info("  %s", u)
-
-    # ------------------------------------------------------------------
-    # Summary
-    # ------------------------------------------------------------------
-    total = len(downloaded_files)
-    success = len(uploaded_urls)
-    failed = total - success
+    logger.info("STEP 2: Cleaning CSV and appending to Volume Cockpit.xlsx …")
+    try:
+        summary = data_processor.process(csv_path, cfg)
+    except Exception as exc:
+        logger.error("Data processing failed: %s", exc)
+        sys.exit(2)
 
     logger.info("=" * 60)
-    logger.info("Run complete: %d/%d succeeded, %d failed.", success, total, failed)
+    if summary["skipped"]:
+        logger.info("Skipped: Year=%s Month=%s already present in workbook.",
+                    summary["year"], summary["month"])
+    else:
+        logger.info("Appended %d row(s) for Year=%s Month=%s.",
+                    summary["rows_appended"], summary["year"], summary["month"])
+        logger.info("Backup written alongside the workbook.")
     logger.info("Log saved to: %s", LOG_FILE.resolve())
     logger.info("=" * 60)
-
-    sys.exit(0 if failed == 0 else 1)
 
 
 if __name__ == "__main__":
