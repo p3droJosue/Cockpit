@@ -291,10 +291,15 @@ class TableauDownloader:
         """
         push_selectors = [
             'button:has-text("Send Push")',
+            'button:has-text("Send push")',
             'input[value="Send Push"]',
+            'input[value*="Push" i]',
             'input[type="submit"][value*="Push"]',
             '[data-se="okta_verify-signed_nonce"] button',
+            '[data-se="factor-button"]',
             'input.button.button-primary',
+            'button.button-primary',
+            '.o-form-button-bar input[type="submit"]',
         ]
         # Wait for ANY of them to appear (visible). If none show up in 20s
         # we still try the role-based fallback below before giving up.
@@ -512,12 +517,16 @@ class TableauDownloader:
         # export_sheet is empty (single-sheet views don't show a picker).
         sheet = (self.cfg.get("export_sheet") or "").strip()
         if sheet:
-            # Wait for the sheet thumbnail (or the dialog itself) before
-            # clicking — replaces sleep(2) with a bounded, event-driven wait.
+            # Wait for the crosstab dialog to render before clicking the
+            # sheet. We can't include `text="{sheet}"` in the combined
+            # wait — Playwright's `text=` is a separate engine and can't
+            # be comma-joined with CSS. The `_click_first` below tries
+            # each selector individually so the text engine is fine there.
             try:
                 target.wait_for_selector(
                     f'[data-tb-test-id="crosstab-options-dialog-thumbnail-{sheet}"], '
-                    f'[aria-label="{sheet}"], text="{sheet}"',
+                    f'[aria-label="{sheet}"], '
+                    f'[data-tb-test-id*="crosstab-options-dialog"]',
                     state="visible", timeout=15_000,
                 )
             except PlaywrightTimeout:
