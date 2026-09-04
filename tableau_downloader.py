@@ -102,23 +102,25 @@ class TableauDownloader:
 
         # If the persistent profile already has a valid Okta session, we'll
         # land straight on Tableau and never see a login form — skip auto-
-        # fill in that case. Otherwise: fill the User ID + click Log In to
-        # trigger the Okta Verify push, then sit on `manual_login_wait` for
-        # you to tap "Approve" on your phone.
+        # fill AND the MFA wait in that case (huge speed win on cached runs).
         email = (self.cfg.get("email") or "").strip()
         password = (self.cfg.get("password") or "").strip()
 
+        did_login_flow = False
         if email:
-            self._auto_fill_login(page, email, password)
+            did_login_flow = self._auto_fill_login(page, email, password)
         else:
             logger.info("No credentials configured — relying on cached session "
                         "or your manual login in the launched browser window.")
 
         manual_login_wait = int(self.cfg.get("manual_login_wait", 0))
-        if manual_login_wait > 0:
+        if manual_login_wait > 0 and did_login_flow:
             logger.info("Waiting %ds for MFA approval on your phone …",
                         manual_login_wait)
             time.sleep(manual_login_wait)
+        elif manual_login_wait > 0:
+            logger.info("Cached Okta session detected — skipping the "
+                        "%ds MFA wait.", manual_login_wait)
 
         # Wait for the post-MFA redirect back to Cockpit BEFORE looking for
         # the viz. Without this, if login stalls we sit on secure.pepsico.com
@@ -146,12 +148,15 @@ class TableauDownloader:
         )
         logger.info("Login/landing complete.")
 
-    def _auto_fill_login(self, page, email: str, password: str):
+    def _auto_fill_login(self, page, email: str, password: str) -> bool:
         """
         Fill the User ID and click Log In on whichever login flow PepsiCo
         is serving (custom Okta widget on secure.pepsico.com or, as a
-        fallback, Microsoft Azure AD). Returns silently if no login form
-        appears — that means we landed on a cached session.
+        fallback, Microsoft Azure AD).
+
+        Returns True if a login form was actually filled (so the caller
+        should sleep for MFA), False if we landed on a cached session
+        and nothing needed to be done.
 
         The password step is OPTIONAL: PepsiCo's Okta flow often goes
         straight from User ID → push notification with no password page,
@@ -167,11 +172,13 @@ class TableauDownloader:
         ]
         combined = ", ".join(user_id_selectors)
 
+        # Shorter wait than before (was 15s): if we're on a cached session
+        # the login form never appears and this timeout is dead weight.
         try:
-            page.wait_for_selector(combined, timeout=15_000)
+            page.wait_for_selector(combined, timeout=6_000)
         except PlaywrightTimeout:
             logger.info("No login form detected — assuming cached session.")
-            return
+            return False
 
         field = None
         matched = None
@@ -183,7 +190,7 @@ class TableauDownloader:
         if not field:
             logger.warning("Login form is up but no matching User ID field. "
                            "You'll need to type it manually.")
-            return
+            return False
 
         logger.info("Filling User ID (selector: %s) and clicking Log In.", matched)
         field.fill(email)
@@ -223,6 +230,8 @@ class TableauDownloader:
             page.click('input[value="Yes"], #idSIButton9', timeout=5_000)
         except PlaywrightTimeout:
             pass
+
+        return True
 
     def _click_okta_verify_flow(self, page):
         """
@@ -345,12 +354,29 @@ class TableauDownloader:
 
     def _open(self, page, url: str):
         page.goto(url)
-        # Wait for the viz to render
+        # Prefer specific waits over a fixed sleep: land on the iframe DOM
+        # element (Cockpit wraps the viz in <iframe title="Data Visualization">),
+        # then let its inner document reach domcontentloaded. That's what
+        # `time.sleep(6)` was approximating, but it returns as soon as the
+        # viz is actually ready instead of always paying 6s.
         try:
-            page.wait_for_selector("iframe, .tab-widget", timeout=self.cfg["page_load_timeout"] * 1000)
+            iframe = page.wait_for_selector(
+                'iframe[title="Data Visualization"], '
+                'iframe[src*="cockpit.mypepsico.com/views"], '
+                'iframe[src*="/views/"], '
+                '.tab-widget',
+                timeout=self.cfg["page_load_timeout"] * 1000,
+            )
+            if iframe is not None:
+                frame = iframe.content_frame()
+                if frame is not None:
+                    try:
+                        frame.wait_for_load_state("domcontentloaded", timeout=15_000)
+                    except PlaywrightTimeout:
+                        pass
         except PlaywrightTimeout:
-            logger.warning("Viz container not detected by selector; waiting fixed time.")
-        time.sleep(6)  # Cockpit needs time to render the full table
+            logger.warning("Viz container not detected — falling back to a short sleep.")
+            time.sleep(3)
 
     # ------------------------------------------------------------------
     # Filters (fallback path only)
@@ -458,7 +484,16 @@ class TableauDownloader:
             self._dump_debug_state(page, "download_button_not_found")
             raise
 
-        time.sleep(1)
+        # Instead of sleep(1) — wait for the Crosstab flyout option to
+        # actually be visible. Returns as soon as the menu is up.
+        try:
+            target.wait_for_selector(
+                '[data-tb-test-id="download-flyout-DownloadCrosstab-Button"], '
+                'button:has-text("Crosstab"), a:has-text("Crosstab")',
+                state="visible", timeout=10_000,
+            )
+        except PlaywrightTimeout:
+            pass  # try the click anyway; _click_first still logs a good error
 
         # 2) Choose "Crosstab" from the flyout menu.
         try:
@@ -472,13 +507,22 @@ class TableauDownloader:
             self._dump_debug_state(page, "crosstab_option_not_found")
             raise
 
-        time.sleep(2)  # crosstab dialog opens
-
         # 3) The crosstab dialog asks you to pick which sheet to export.
         # For Field Labor Efficiency it's "Volume Cockpit". Skipped if
         # export_sheet is empty (single-sheet views don't show a picker).
         sheet = (self.cfg.get("export_sheet") or "").strip()
         if sheet:
+            # Wait for the sheet thumbnail (or the dialog itself) before
+            # clicking — replaces sleep(2) with a bounded, event-driven wait.
+            try:
+                target.wait_for_selector(
+                    f'[data-tb-test-id="crosstab-options-dialog-thumbnail-{sheet}"], '
+                    f'[aria-label="{sheet}"], text="{sheet}"',
+                    state="visible", timeout=15_000,
+                )
+            except PlaywrightTimeout:
+                pass
+
             try:
                 self._click_first(target, [
                     f'[data-tb-test-id="crosstab-options-dialog-thumbnail-{sheet}"]',
@@ -491,7 +535,6 @@ class TableauDownloader:
             except RuntimeError:
                 self._dump_debug_state(page, "sheet_pick_not_found")
                 raise
-            time.sleep(1)
 
         # 4) Select CSV format
         fmt = self.cfg.get("export_format", "CSV").upper()

@@ -26,14 +26,19 @@ tableau:
   headless: false
 
   # Seconds to wait after submitting User ID, giving you time to tap
-  # "Approve" on the Okta push. Once the Okta session is cached in
-  # .playwright-profile/, set this back to 0.
+  # "Approve" on the Okta push. The script now automatically SKIPS this
+  # wait when the Okta session is already cached — you can keep it at 60
+  # as a safety net; it only triggers when a fresh login is required.
   manual_login_wait: 60
 
 
-sharepoint:
-  tenant_id: "your-tenant-id"
-  client_id: "your-client-id"
-  client_secret: "your-client-secret"
-  sharepoint_hostname: "pepsico.sharepoint.com"
-  site_name: "YourSharePointSiteName"
+excel:
+  # Local path to your OneDrive-synced SharePoint folder that holds
+  # Volume Cockpit.xlsx. Every run appends the new month here.
+  folder: "C:/Users/81010435/Pepsico/Field Labor Efficiency Workspace - Cockpit"
+  # Filename PBI is pointed at. The pipeline replaces its content in place
+  # after copying the previous version to backup_name.
+  file_name: "Volume Cockpit.xlsx"
+  backup_name: "Volume Cockpit Backup.xlsx"
+  # Sheet name inside the workbook. Empty = the first/active sheet.
+  sheet_name: ""

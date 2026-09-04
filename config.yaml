@@ -85,12 +85,27 @@ tableau:
   output_filename: "FieldLaborEfficiency_{date}.csv"
 
 
+excel:
+  # Local folder where the historical workbook lives (usually the local
+  # path of a SharePoint document library synced with OneDrive).
+  # Override in config.local.yaml per machine.
+  folder: ""
+  file_name: "Volume Cockpit.xlsx"
+  # A copy of the current workbook is written here BEFORE any append,
+  # so you always have the previous version if something goes wrong.
+  backup_name: "Volume Cockpit Backup.xlsx"
+  # Sheet inside the workbook to append into. Empty = the active/first sheet.
+  sheet_name: ""
+
+
+# The sharepoint section is kept for reference — the pipeline now writes
+# directly into the OneDrive-synced folder above and no longer uploads
+# through the Graph API. Safe to leave empty.
 sharepoint:
-  # All secret values below should be set in config.local.yaml
   tenant_id: ""
   client_id: ""
   client_secret: ""
-  sharepoint_hostname: ""     # e.g. pepsico.sharepoint.com
+  sharepoint_hostname: ""
   site_name: ""
   drive_name: "Documents"
   folder_path: "PowerBI/Cockpit Exports"
