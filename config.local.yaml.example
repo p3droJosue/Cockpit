@@ -35,7 +35,7 @@ tableau:
 excel:
   # Local path to your OneDrive-synced SharePoint folder that holds
   # Volume Cockpit.xlsx. Every run appends the new month here.
-  folder: "C:/Users/<YOUR_USER>/Pepsico/Field Labor Efficiency Workspace - Cockpit"
+  folder: "C:/Users/<YOUR_USER>/<Your synced SharePoint folder>"
   # Filename PBI is pointed at. The pipeline replaces its content in place
   # after copying the previous version to backup_name.
   file_name: "Volume Cockpit.xlsx"
