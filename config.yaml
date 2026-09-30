@@ -8,10 +8,11 @@
 # =============================================================================
 
 tableau:
-  # Login page / Cockpit base. You must be on the PepsiCo network or VPN.
+  # Login page / Cockpit base (Tableau Server root). Set the real value in
+  # config.local.yaml. You must be on the corporate network or VPN.
   site_url: "https://<your-tableau-server>"
 
-  # The view you export from (the URL you shared)
+  # The view you export from — set the real URL in config.local.yaml
   view_url: "https://<your-tableau-server>/#/views/<Workbook>/<View>"
 
   # -------------------------------------------------------------------

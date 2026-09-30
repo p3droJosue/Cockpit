@@ -19,6 +19,7 @@ import re
 import shutil
 import time
 from datetime import datetime
+from urllib.parse import urlparse
 from pathlib import Path
 
 from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeout
@@ -35,6 +36,8 @@ def sanitize_filename(name: str) -> str:
 class TableauDownloader:
     def __init__(self, config: dict):
         self.cfg = config["tableau"]
+        # Server hostname, derived from site_url so it isn't hard-coded.
+        self.host = urlparse(self.cfg["site_url"]).netloc
         self.download_dir = Path(self.cfg["download_dir"])
         self.download_dir.mkdir(parents=True, exist_ok=True)
 
@@ -128,11 +131,11 @@ class TableauDownloader:
         # <iframe class="hide" data-se="account-chooser">, which never
         # becomes visible and burns the whole timeout.
         try:
-            page.wait_for_url(re.compile(r"<your-tableau-server>"),
+            page.wait_for_url(re.compile(re.escape(self.host)),
                               timeout=self.cfg["page_load_timeout"] * 1000)
         except PlaywrightTimeout:
             raise RuntimeError(
-                "Never redirected to <your-tableau-server> — login stalled "
+                f"Never redirected to {self.host} — login stalled "
                 "(probably at Okta's Send Push screen). Approve the push, "
                 "or check the earlier log lines for which step didn't click."
             )
@@ -141,7 +144,7 @@ class TableauDownloader:
         # accidentally match Okta's hidden account-chooser iframe.
         page.wait_for_selector(
             ".tab-widget, #tabViewerToolbarRegion, "
-            "iframe[src*='<your-tableau-server>'], "
+            f"iframe[src*='{self.host}'], "
             "iframe[src*='tableau']",
             state="visible",
             timeout=self.cfg["page_load_timeout"] * 1000,
@@ -367,7 +370,7 @@ class TableauDownloader:
         try:
             iframe = page.wait_for_selector(
                 'iframe[title="Data Visualization"], '
-                'iframe[src*="<your-tableau-server>/views"], '
+                f'iframe[src*="{self.host}/views"], '
                 'iframe[src*="/views/"], '
                 '.tab-widget',
                 timeout=self.cfg["page_load_timeout"] * 1000,
@@ -576,7 +579,7 @@ class TableauDownloader:
         """
         Return the Frame that hosts the Tableau viz. Cockpit wraps it in
         an <iframe title="Data Visualization"> whose src points at
-        <your-tableau-server>/views/... The previous URL-iteration
+        <site_url host>/views/... The previous URL-iteration
         approach failed because page.frames may not yet reflect the
         iframe's real URL just after navigation — it shows about:blank
         until the child navigation completes. Resolving the frame from
@@ -584,7 +587,7 @@ class TableauDownloader:
         """
         iframe_selectors = [
             'iframe[title="Data Visualization"]',
-            'iframe[src*="<your-tableau-server>/views"]',
+            f'iframe[src*="{self.host}/views"]',
             'iframe[src*="/views/"]',
             'iframe[src*="/vizql/"]',
             'iframe[src*="tableau"]',
